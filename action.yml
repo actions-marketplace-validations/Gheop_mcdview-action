@@ -1,0 +1,87 @@
+name: 'mcdview'
+description: 'Generate or update an interactive ER diagram from a database schema on mcdview.dev'
+branding:
+  icon: 'database'
+  color: 'blue'
+inputs:
+  file:
+    description: 'Path to the schema file (.sql, .dbm, .dbml, .prisma, .mwb, .rb, .mmd, .ts)'
+    required: true
+  key:
+    description: 'Management key to update an existing diagram (store it in a secret). Omit to create a new one.'
+    required: false
+    default: ''
+  title:
+    description: 'Diagram title (creation only)'
+    required: false
+    default: ''
+  lang:
+    description: 'Diagram language, fr or en (creation only)'
+    required: false
+    default: 'en'
+  expire:
+    description: 'Ephemeral link: days before auto-deletion (creation only). 0 = permanent.'
+    required: false
+    default: '0'
+  fail-on:
+    description: "Fail the job when the schema diagnostic is worse than this: 'ok', 'anomaly', or 'off' (default)."
+    required: false
+    default: 'off'
+outputs:
+  url:
+    description: 'Public URL of the interactive diagram'
+    value: ${{ steps.run.outputs.url }}
+  gestion:
+    description: 'Management URL (creation only)'
+    value: ${{ steps.run.outputs.gestion }}
+  diff:
+    description: 'Diff URL (updates only, from the 2nd version)'
+    value: ${{ steps.run.outputs.diff }}
+  status:
+    description: 'Diagnostic status: ok, no_table, anomaly or error'
+    value: ${{ steps.run.outputs.status }}
+runs:
+  using: 'composite'
+  steps:
+    - id: run
+      shell: bash
+      env:
+        MCDVIEW_FILE: ${{ inputs.file }}
+        MCDVIEW_KEY: ${{ inputs.key }}
+        MCDVIEW_TITLE: ${{ inputs.title }}
+        MCDVIEW_LANG: ${{ inputs.lang }}
+        MCDVIEW_EXPIRE: ${{ inputs.expire }}
+        MCDVIEW_FAILON: ${{ inputs.fail-on }}
+      run: |
+        set -euo pipefail
+        if [ -n "$MCDVIEW_KEY" ]; then
+          R=$(curl -sfS -H 'accept: application/json' \
+                -F "fichier=@${MCDVIEW_FILE}" \
+                "https://mcdview.dev/g/${MCDVIEW_KEY}/actualiser")
+        else
+          R=$(curl -sfS -H 'accept: application/json' \
+                -F "fichier=@${MCDVIEW_FILE}" \
+                -F "titre=${MCDVIEW_TITLE}" \
+                -F "lang=${MCDVIEW_LANG}" \
+                -F "expire=${MCDVIEW_EXPIRE}" \
+                "https://mcdview.dev/generer")
+        fi
+        url=$(echo "$R" | jq -r '.url // empty')
+        if [ -z "$url" ]; then
+          echo "::error::mcdview: $(echo "$R" | jq -r '.erreur // "unknown error"')"
+          exit 1
+        fi
+        status=$(echo "$R" | jq -r '.diagnostic.status // "unknown"')
+        {
+          echo "url=$url"
+          echo "gestion=$(echo "$R" | jq -r '.gestion // empty')"
+          echo "diff=$(echo "$R" | jq -r '.diff // empty')"
+          echo "status=$status"
+        } >> "$GITHUB_OUTPUT"
+        echo "Diagram: $url  (diagnostic: $status)"
+        case "$MCDVIEW_FAILON" in
+          ok)
+            [ "$status" = "ok" ] || { echo "::error::schema diagnostic is '$status' (fail-on: ok)"; exit 1; } ;;
+          anomaly)
+            case "$status" in ok|anomaly) : ;; *) echo "::error::schema diagnostic is '$status' (fail-on: anomaly)"; exit 1 ;; esac ;;
+        esac
