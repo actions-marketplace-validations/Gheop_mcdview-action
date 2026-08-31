@@ -105,6 +105,60 @@ the management page).
 problem), tolerating content anomalies. `off` (default) never fails on the
 diagnostic.
 
+## Badge and exports
+
+### Badge in your README (no committing)
+
+The badge is a **live URL**: paste it once and it updates itself on every run
+(the image is regenerated server-side). With `oidc` the id is stable, so the
+line never changes. The action also exposes it as the `badge` output and writes
+it to `<out-dir>/badge.md`:
+
+```markdown
+[![mcdview](https://mcdview.dev/badge/<id>.svg)](https://mcdview.dev/v/<id>)
+```
+
+### Download mermaid / SVG / PNG
+
+`fetch` downloads read-only artifacts into `out-dir` (default `mcdview/`):
+
+```yaml
+- uses: Gheop/mcdview-action@v1
+  with:
+    file: db/schema.sql
+    oidc: true
+    fetch: mermaid,svg,md      # -> mcdview/schema.mmd, schema.svg, schema.md
+```
+
+`md` wraps the mermaid in a ```` ```mermaid ```` block that GitHub renders inline.
+
+### Commit those files back (built-in token)
+
+Unlike GitLab, GitHub's `GITHUB_TOKEN` can push with `permissions: contents:
+write` — no extra secret:
+
+```yaml
+jobs:
+  mcdview:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write     # for oidc
+      contents: write     # to commit the docs back
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Gheop/mcdview-action@v1
+        with:
+          file: db/schema.sql
+          oidc: true
+          fetch: mermaid,svg,md
+      - run: |
+          git config user.name mcdview-ci
+          git config user.email ci@users.noreply.github.com
+          git add mcdview/
+          git commit -m "docs: refresh mcdview [skip ci]" || exit 0
+          git push
+```
+
 ## Inputs
 
 | input | required | default | description |
@@ -117,13 +171,17 @@ diagnostic.
 | `lang` | no | `en` | diagram language, `fr` or `en` (creation only) |
 | `expire` | no | `0` | ephemeral link: days before auto-deletion (creation only); `0` = permanent |
 | `fail-on` | no | `off` | fail when the diagnostic is worse than `ok` / `anomaly`; `off` disables |
+| `fetch` | no | | comma list to download into out-dir: `mermaid`, `md`, `svg`, `png`, `badge`, `facts` |
+| `out-dir` | no | `mcdview` | directory for fetched artifacts (+ a ready-to-paste `badge.md`) |
 
 ## Outputs
 
 | output | description |
 |--------|-------------|
 | `url` | public URL of the interactive diagram |
-| `gestion` | management URL (creation only) |
+| `jeton` | diagram id (last path segment of the URL) |
+| `badge` | ready-to-paste clickable markdown badge |
+| `gestion` | management URL (creation only; empty in oidc mode) |
 | `diff` | diff URL (updates only, from the 2nd version) |
 | `status` | diagnostic status: `ok`, `no_table`, `anomaly`, `error` |
 

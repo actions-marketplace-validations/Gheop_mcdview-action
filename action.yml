@@ -35,6 +35,14 @@ inputs:
     description: "Fail the job when the schema diagnostic is worse than this: 'ok', 'anomaly', or 'off' (default)."
     required: false
     default: 'off'
+  fetch:
+    description: 'Comma-separated artifacts to download into out-dir: mermaid, md (mermaid in a .md), svg, png, badge, facts. Empty = none.'
+    required: false
+    default: ''
+  out-dir:
+    description: 'Directory for fetched artifacts (also gets a ready-to-paste badge.md).'
+    required: false
+    default: 'mcdview'
 outputs:
   url:
     description: 'Public URL of the interactive diagram'
@@ -48,6 +56,12 @@ outputs:
   status:
     description: 'Diagnostic status: ok, no_table, anomaly or error'
     value: ${{ steps.run.outputs.status }}
+  jeton:
+    description: 'Diagram id (last path segment of the URL)'
+    value: ${{ steps.run.outputs.jeton }}
+  badge:
+    description: 'Ready-to-paste clickable markdown badge'
+    value: ${{ steps.run.outputs.badge }}
 runs:
   using: 'composite'
   steps:
@@ -62,6 +76,8 @@ runs:
         MCDVIEW_LANG: ${{ inputs.lang }}
         MCDVIEW_EXPIRE: ${{ inputs.expire }}
         MCDVIEW_FAILON: ${{ inputs.fail-on }}
+        MCDVIEW_FETCH: ${{ inputs.fetch }}
+        MCDVIEW_OUTDIR: ${{ inputs.out-dir }}
       run: |
         set -euo pipefail
         if [ "$MCDVIEW_OIDC" = "true" ]; then
@@ -96,13 +112,29 @@ runs:
           exit 1
         fi
         status=$(echo "$R" | jq -r '.diagnostic.status // "unknown"')
+        jeton="${url##*/}"
+        badge="[![mcdview](https://mcdview.dev/badge/${jeton}.svg)](${url})"
         {
           echo "url=$url"
           echo "gestion=$(echo "$R" | jq -r '.gestion // empty')"
           echo "diff=$(echo "$R" | jq -r '.diff // empty')"
           echo "status=$status"
+          echo "jeton=$jeton"
+          echo "badge=$badge"
         } >> "$GITHUB_OUTPUT"
         echo "Diagram: $url  (diagnostic: $status)"
+        # dossier toujours créé avec le badge prêt à coller ; fetch = artefacts
+        mkdir -p "$MCDVIEW_OUTDIR"
+        printf '%s\n' "$badge" > "$MCDVIEW_OUTDIR/badge.md"
+        if [ -n "$MCDVIEW_FETCH" ]; then
+          case ",$MCDVIEW_FETCH," in *,mermaid,*) curl -sfS "https://mcdview.dev/m/$jeton" -o "$MCDVIEW_OUTDIR/schema.mmd" ;; esac
+          case ",$MCDVIEW_FETCH," in *,md,*) { echo '```mermaid'; curl -sfS "https://mcdview.dev/m/$jeton"; echo '```'; } > "$MCDVIEW_OUTDIR/schema.md" ;; esac
+          case ",$MCDVIEW_FETCH," in *,svg,*) curl -sfS "https://mcdview.dev/p/$jeton.svg" -o "$MCDVIEW_OUTDIR/schema.svg" ;; esac
+          case ",$MCDVIEW_FETCH," in *,png,*) curl -sfS "https://mcdview.dev/p/$jeton.png" -o "$MCDVIEW_OUTDIR/schema.png" ;; esac
+          case ",$MCDVIEW_FETCH," in *,badge,*) curl -sfS "https://mcdview.dev/badge/$jeton.svg" -o "$MCDVIEW_OUTDIR/badge.svg" ;; esac
+          case ",$MCDVIEW_FETCH," in *,facts,*) curl -sfS "https://mcdview.dev/f/$jeton.txt" -o "$MCDVIEW_OUTDIR/facts.txt" ;; esac
+          echo "Artifacts in $MCDVIEW_OUTDIR/:"; ls -1 "$MCDVIEW_OUTDIR"
+        fi
         case "$MCDVIEW_FAILON" in
           ok)
             [ "$status" = "ok" ] || { echo "::error::schema diagnostic is '$status' (fail-on: ok)"; exit 1; } ;;
