@@ -7,8 +7,16 @@ inputs:
   file:
     description: 'Path to the schema file (.sql, .dbm, .dbml, .prisma, .mwb, .rb, .mmd, .ts)'
     required: true
+  oidc:
+    description: "Zero-key mode: bind the diagram to THIS repository via an OIDC token (upsert). Requires 'permissions: id-token: write' in the workflow. First run creates, later runs update the same link."
+    required: false
+    default: 'false'
+  audience:
+    description: 'Audience claim for the OIDC token (must match the service).'
+    required: false
+    default: 'https://mcdview.dev'
   key:
-    description: 'Management key to update an existing diagram (store it in a secret). Omit to create a new one.'
+    description: 'Management key to update an existing diagram (store it in a secret). Ignored when oidc is true. Omit to create a new one.'
     required: false
     default: ''
   title:
@@ -47,6 +55,8 @@ runs:
       shell: bash
       env:
         MCDVIEW_FILE: ${{ inputs.file }}
+        MCDVIEW_OIDC: ${{ inputs.oidc }}
+        MCDVIEW_AUD: ${{ inputs.audience }}
         MCDVIEW_KEY: ${{ inputs.key }}
         MCDVIEW_TITLE: ${{ inputs.title }}
         MCDVIEW_LANG: ${{ inputs.lang }}
@@ -54,7 +64,21 @@ runs:
         MCDVIEW_FAILON: ${{ inputs.fail-on }}
       run: |
         set -euo pipefail
-        if [ -n "$MCDVIEW_KEY" ]; then
+        if [ "$MCDVIEW_OIDC" = "true" ]; then
+          # zéro clé : l'identité du dépôt (jeton OIDC) crée ou met à jour
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::oidc: true requires 'permissions: id-token: write' in the workflow"; exit 1
+          fi
+          TOK=$(curl -sfS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${MCDVIEW_AUD}" | jq -r '.value')
+          R=$(curl -sfS -H 'accept: application/json' \
+                -H "Authorization: Bearer ${TOK}" \
+                -F "fichier=@${MCDVIEW_FILE}" \
+                -F "titre=${MCDVIEW_TITLE}" \
+                -F "lang=${MCDVIEW_LANG}" \
+                -F "expire=${MCDVIEW_EXPIRE}" \
+                "https://mcdview.dev/upsert")
+        elif [ -n "$MCDVIEW_KEY" ]; then
           R=$(curl -sfS -H 'accept: application/json' \
                 -F "fichier=@${MCDVIEW_FILE}" \
                 "https://mcdview.dev/g/${MCDVIEW_KEY}/actualiser")
